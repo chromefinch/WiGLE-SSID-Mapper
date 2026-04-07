@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WiGLE SSID Mapper</title>
+    
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet.js for FOSS mapping -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Leaflet Draw Plugin for bounding box drawing -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+    
+    <style>
+        /* Custom Map Styles */
+        #map { height: 100%; width: 100%; z-index: 10; }
+        
+        /* Premium Dark Mode Leaflet Popups */
+        .custom-popup-wrapper .leaflet-popup-content-wrapper {
+            background-color: #1f2937;
+            color: #f3f4f6;
+            border: 1px solid #374151;
+            border-radius: 0.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.25);
+        }
+        .custom-popup-wrapper .leaflet-popup-tip {
+            background-color: #1f2937;
+            border: 1px solid #374151;
+        }
+        .custom-popup-wrapper .leaflet-popup-close-button {
+            color: #9ca3af !important;
+        }
+        .custom-popup-wrapper .leaflet-popup-close-button:hover {
+            color: #f3f4f6 !important;
+        }
+        
+        /* Make leaflet draw toolbar pop slightly better on dark maps */
+        .leaflet-draw-toolbar {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5) !important;
+        }
+
+        /* Custom scrollbar for terminal */
+        #logConsole::-webkit-scrollbar {
+            width: 8px;
+        }
+        #logConsole::-webkit-scrollbar-track {
+            background: #111827; 
+        }
+        #logConsole::-webkit-scrollbar-thumb {
+            background: #374151; 
+            border-radius: 4px;
+        }
+        #logConsole::-webkit-scrollbar-thumb:hover {
+            background: #4b5563; 
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans h-screen w-screen overflow-hidden flex flex-col md:flex-row">
+
+    <!-- Sidebar Panel -->
+    <div class="w-full md:w-[400px] flex flex-col border-r border-gray-700 bg-gray-800 z-20 shadow-2xl h-[50vh] md:h-screen">
+        <div class="p-6 overflow-y-auto h-full flex flex-col">
+            
+            <h1 class="text-2xl font-bold mb-1 flex items-center gap-2 text-blue-400">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"></path></svg>
+                WiGLE Explorer
+            </h1>
+            <p class="text-xs text-gray-400 mb-6">FOSS Geographic SSID Mapper</p>
+
+            <form id="searchForm" class="space-y-5 flex-1">
+                
+                <!-- Authentication Section -->
+                <div class="bg-gray-750 border border-gray-700 p-4 rounded-lg shadow-inner bg-gray-900">
+                    <div class="flex justify-between items-center mb-3">
+                        <h2 class="text-xs uppercase text-gray-400 font-semibold tracking-wider">WiGLE Credentials</h2>
+                        <a href="https://wigle.net/account" target="_blank" class="text-[10px] text-blue-400 hover:underline">Get API Key</a>
+                    </div>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-xs font-medium mb-1 text-gray-300">Encoded API Name</label>
+                            <input type="text" id="apiName" required class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="e.g., AID... ">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1 text-gray-300">API Token</label>
+                            <input type="password" id="apiToken" required class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="••••••••••••••••">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Query Parameters -->
+                <div class="bg-gray-750 border border-gray-700 p-4 rounded-lg shadow-inner bg-gray-900">
+                    <h2 class="text-xs uppercase text-gray-400 font-semibold tracking-wider mb-3">Target Query</h2>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="block text-xs font-medium mb-1 text-gray-300">Network Name (SSID)</label>
+                            <input type="text" id="ssidQuery" required class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="e.g., xfinitywifi">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1 text-gray-300">Search Area <span class="text-gray-500 font-normal">(Type OR Draw on Map)</span></label>
+                            <input type="text" id="areaQuery" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="e.g., Virginia, USA or Draw a Box">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium mb-1 text-gray-300">Pagination Limit</label>
+                            <select id="maxResults" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-white">
+                                <option value="100">100 APs (Fast)</option>
+                                <option value="500">500 APs</option>
+                                <option value="1000" selected>1000 APs (Recommended)</option>
+                                <option value="5000">5000 APs (Slow, use with caution)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" id="searchBtn" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 px-4 rounded-lg transition-colors shadow-lg flex justify-center items-center gap-2">
+                    Execute Search Map
+                </button>
+            </form>
+
+            <!-- Status Console -->
+            <div class="mt-4">
+                <h2 class="text-xs uppercase text-gray-400 font-semibold tracking-wider mb-2">Activity Console</h2>
+                <div id="logConsole" class="bg-gray-950 p-3 rounded-lg h-32 md:h-40 overflow-y-auto text-xs font-mono space-y-1 border border-gray-700 shadow-inner">
+                    <div class="text-gray-500">[System] Map engine initialized.</div>
+                    <div class="text-gray-500">[System] Awaiting execution parameters.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Map Canvas Container -->
+    <div class="flex-1 relative h-[50vh] md:h-screen">
+        <div id="map"></div>
+    </div>
+
+    <script>
+        // --- Core Application State ---
+        let map;
+        let mapMarkers = [];
+        let drawnItems;
+        let useDrawnBounds = false;
+        let customBounds = null;
+
+        // --- Map Initialization ---
+        function initMap() {
+            // Default View: Center of the US
+            map = L.map('map', { zoomControl: false }).setView([39.8283, -98.5795], 4);
+            L.control.zoom({ position: 'topright' }).addTo(map);
+
+            // Using CARTO Dark Matter (FOSS mapping style overlay based on OSM data)
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 20
+            }).addTo(map);
+
+            // Initialize FeatureGroup to store drawn boxes
+            drawnItems = new L.FeatureGroup();
+            map.addLayer(drawnItems);
+
+            // Add Leaflet Draw Control
+            const drawControl = new L.Control.Draw({
+                draw: {
+                    polygon: false,
+                    polyline: false,
+                    circle: false,
+                    marker: false,
+                    circlemarker: false,
+                    rectangle: {
+                        shapeOptions: {
+                            color: "#ef4444", 
+                            weight: 2, 
+                            fillColor: "#ef4444", 
+                            fillOpacity: 0.05,
+                            dashArray: "5, 5"
+                        }
+                    }
+                },
+                edit: {
+                    featureGroup: drawnItems,
+                    edit: false // Simplified: user just deletes or redraws
+                }
+            });
+            map.addControl(drawControl);
+
+            // Event Listeners for Drawing
+            map.on(L.Draw.Event.CREATED, function (e) {
+                drawnItems.clearLayers(); // Restrict to a single bounding box
+                const layer = e.layer;
+                drawnItems.addLayer(layer);
+                
+                customBounds = layer.getBounds();
+                useDrawnBounds = true;
+                
+                // Update UI text input to visually indicate the drawn box is active
+                const areaInput = document.getElementById('areaQuery');
+                areaInput.value = "[Custom Map Area Drawn]";
+                areaInput.classList.add('text-green-400', 'font-semibold');
+                
+                logMessage("Custom geographic bounds established via map drawing.", "success");
+            });
+
+            map.on(L.Draw.Event.DELETED, function(e) {
+                 if (drawnItems.getLayers().length === 0) {
+                     useDrawnBounds = false;
+                     customBounds = null;
+                     
+                     const areaInput = document.getElementById('areaQuery');
+                     if (areaInput.value === "[Custom Map Area Drawn]") {
+                         areaInput.value = "";
+                     }
+                     areaInput.classList.remove('text-green-400', 'font-semibold');
+                     
+                     logMessage("Custom geographic bounds removed.");
+                 }
+            });
+
+            // Listen to text input to clear drawn bounds if the user starts typing manually
+            document.getElementById('areaQuery').addEventListener('input', (e) => {
+                if (useDrawnBounds && e.target.value !== "[Custom Map Area Drawn]") {
+                    useDrawnBounds = false;
+                    customBounds = null;
+                    drawnItems.clearLayers();
+                    e.target.classList.remove('text-green-400', 'font-semibold');
+                    logMessage("Switched back to text-based area search.");
+                }
+            });
+        }
+
+        // --- Logging Utility ---
+        function logMessage(msg, type = 'info') {
+            const consoleBox = document.getElementById('logConsole');
+            const entry = document.createElement('div');
+            
+            let colorClass = 'text-gray-300';
+            let prefix = '[-]';
+            
+            if (type === 'error') {
+                colorClass = 'text-red-400';
+                prefix = '[ERROR]';
+            } else if (type === 'success') {
+                colorClass = 'text-green-400';
+                prefix = '[OK]';
+            } else if (type === 'warn') {
+                colorClass = 'text-yellow-400';
+                prefix = '[WARN]';
+            }
+            
+            entry.className = `${colorClass} break-words`;
+            entry.textContent = `${prefix} ${msg}`;
+            consoleBox.appendChild(entry);
+            consoleBox.scrollTop = consoleBox.scrollHeight;
+        }
+
+        // --- Exponential Backoff Fetch Wrapper ---
+        async function fetchWithBackoff(url, options = {}, retries = 5) {
+            let delay = 1000;
+            for (let i = 0; i <= retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.ok) return response;
+                    if (response.status === 429 || response.status >= 500) {
+                        if (i === retries) return response; 
+                    } else {
+                        return response; 
+                    }
+                } catch (error) {
+                    if (i === retries) throw error; 
+                }
+                await new Promise(resolve => setTimeout(resolve, delay));
+                delay *= 2;
+            }
+        }
+
+        // --- Primary Search Execution Engine ---
+        async function executeSearch(apiName, apiToken, ssid, areaStr, maxResults) {
+            let latMin, latMax, lonMin, lonMax;
+
+            // 1. Determine geographic coordinates (Drawn Box vs Text Search)
+            if (useDrawnBounds && customBounds) {
+                logMessage("Utilizing custom drawn bounding box coordinates...");
+                latMin = customBounds.getSouth();
+                latMax = customBounds.getNorth();
+                lonMin = customBounds.getWest();
+                lonMax = customBounds.getEast();
+            } else {
+                logMessage(`Resolving geographic coordinates for "${areaStr}"...`);
+                const geoUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(areaStr)}&format=json&limit=1`;
+                
+                const geoRes = await fetchWithBackoff(geoUrl, { headers: { 'User-Agent': 'WiGLE-SSID-Mapper' } });
+                if (!geoRes.ok) throw new Error("Geocoding service unavailable.");
+                
+                const geoData = await geoRes.json();
+                if (!geoData || geoData.length === 0) throw new Error(`Could not pinpoint area: ${areaStr}`);
+                
+                // Extract boundaries
+                const bbox = geoData[0].boundingbox;
+                latMin = parseFloat(bbox[0]);
+                latMax = parseFloat(bbox[1]);
+                lonMin = parseFloat(bbox[2]);
+                lonMax = parseFloat(bbox[3]);
+
+                logMessage(`Coordinates mapped: Bounds [${latMin.toFixed(2)}, ${lonMin.toFixed(2)}] to [${latMax.toFixed(2)}, ${lonMax.toFixed(2)}]`, 'success');
+
+                // Draw boundaries on map and zoom to fit
+                const bounds = [[latMin, lonMin], [latMax, lonMax]];
+                drawnItems.clearLayers();
+                const rect = L.rectangle(bounds, {
+                    color: "#ef4444", 
+                    weight: 2, 
+                    fillColor: "#ef4444", 
+                    fillOpacity: 0.05,
+                    dashArray: "5, 5"
+                });
+                drawnItems.addLayer(rect);
+                map.fitBounds(bounds, { padding: [50, 50] });
+            }
+
+            // Clear previous markers
+            mapMarkers.forEach(m => map.removeLayer(m));
+            mapMarkers = [];
+
+            // 2. Query WiGLE API iteratively
+            logMessage(`Initializing WiGLE intercept sequence for SSID: ${ssid}...`);
+            const authHeader = 'Basic ' + btoa(`${apiName}:${apiToken}`);
+            
+            let fetchedCount = 0;
+            let searchAfterToken = null;
+
+            while (fetchedCount < maxResults) {
+                let apiUrl = `https://api.wigle.net/api/v2/network/search?ssid=${encodeURIComponent(ssid)}&latrange1=${latMin}&latrange2=${latMax}&longrange1=${lonMin}&longrange2=${lonMax}`;
+                
+                if (searchAfterToken) {
+                    apiUrl += `&searchAfter=${searchAfterToken}`;
+                }
+
+                logMessage(`Transmitting API request (Tracking APs: ${fetchedCount} to ${Math.min(fetchedCount + 100, maxResults)})...`);
+                
+                const response = await fetchWithBackoff(apiUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': authHeader,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (!response.ok) {
+                    if (response.status === 401) throw new Error("401 Unauthorized. Verify your API Name and Token.");
+                    if (response.status === 429) throw new Error("429 Rate Limit Exceeded. WiGLE limits daily queries. Try again later.");
+                    if (response.status === 400) throw new Error("400 Bad Request. Bounding box might be too massive for the API.");
+                    throw new Error(`WiGLE Server Error: ${response.status}`);
+                }
+
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.message || "WiGLE payload indicated failure.");
+                }
+
+                const results = data.results || [];
+                if (results.length === 0) {
+                    logMessage(`Scan exhausted. No further results exist for this area.`, 'success');
+                    break;
+                }
+
+                // Parse and Plot Results
+                results.forEach(net => {
+                    if (net.trilat && net.trilong) {
+                        const marker = L.circleMarker([net.trilat, net.trilong], {
+                            radius: 5,
+                            fillColor: "#3b82f6", 
+                            color: "#bfdbfe", 
+                            weight: 1.5,
+                            opacity: 1,
+                            fillOpacity: 0.8
+                        }).addTo(map);
+
+                        let dateStr = 'Unknown';
+                        if (net.lastupdt && net.lastupdt.length >= 8) {
+                            dateStr = `${net.lastupdt.substring(0,4)}-${net.lastupdt.substring(4,6)}-${net.lastupdt.substring(6,8)}`;
+                        }
+
+                        const popupContent = `
+                            <div class="p-1 font-sans min-w-[200px]">
+                                <div class="font-bold text-lg text-blue-400 border-b border-gray-600 pb-2 mb-2 flex items-center justify-between">
+                                    <span>${net.ssid || 'Hidden Network'}</span>
+                                    <span class="text-xs font-normal px-2 py-1 bg-gray-700 rounded-full text-gray-300 ml-2">${net.channel || '?'} Ch</span>
+                                </div>
+                                <div class="grid grid-cols-1 gap-1 text-sm">
+                                    <div class="flex justify-between text-gray-300">
+                                        <span class="font-semibold text-gray-400">BSSID:</span> 
+                                        <span class="font-mono text-xs">${net.netid || 'N/A'}</span>
+                                    </div>
+                                    <div class="flex justify-between text-gray-300">
+                                        <span class="font-semibold text-gray-400">Encryption:</span> 
+                                        <span>${net.encryption || 'Open'}</span>
+                                    </div>
+                                    <div class="flex justify-between text-gray-300">
+                                        <span class="font-semibold text-gray-400">Type:</span> 
+                                        <span>${net.type || 'Unknown'}</span>
+                                    </div>
+                                    <div class="flex justify-between text-gray-300">
+                                        <span class="font-semibold text-gray-400">Last Seen:</span> 
+                                        <span>${dateStr}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+
+                        marker.bindPopup(popupContent, { className: 'custom-popup-wrapper' });
+                        mapMarkers.push(marker);
+                    }
+                });
+
+                fetchedCount += results.length;
+                logMessage(`Plotted block. Total visual assets rendered: ${fetchedCount}`);
+
+                searchAfterToken = data.searchAfter;
+                
+                if (!searchAfterToken || fetchedCount >= maxResults) {
+                    break;
+                }
+                
+                await new Promise(r => setTimeout(r, 600)); 
+            }
+
+            logMessage(`Operation concluded. Mapped ${fetchedCount} total network access points.`, 'success');
+        }
+
+        // --- Event Listeners ---
+        document.addEventListener('DOMContentLoaded', () => {
+            initMap();
+            
+            const form = document.getElementById('searchForm');
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const btn = document.getElementById('searchBtn');
+                const logBox = document.getElementById('logConsole');
+                
+                const areaStr = document.getElementById('areaQuery').value.trim();
+                
+                // Form validation to ensure either a box is drawn or text is entered
+                if (!useDrawnBounds && !areaStr) {
+                    logMessage("Please specify a search area or draw a bounding box on the map.", 'error');
+                    return;
+                }
+                
+                // UX: Loading state
+                btn.disabled = true;
+                btn.classList.replace('bg-blue-600', 'bg-blue-800');
+                btn.innerHTML = `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Compiling Data...`;
+                
+                logBox.innerHTML = '';
+                logMessage('Commencing new operation block...');
+
+                const apiName = document.getElementById('apiName').value.trim();
+                const apiToken = document.getElementById('apiToken').value.trim();
+                const ssid = document.getElementById('ssidQuery').value.trim();
+                const maxResults = parseInt(document.getElementById('maxResults').value, 10);
+
+                try {
+                    await executeSearch(apiName, apiToken, ssid, areaStr, maxResults);
+                } catch (error) {
+                    if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
+                        logMessage("Critical Network Error: API request failed. This often means WiGLE blocked the client-side request due to a CORS policy or browser extension. Consider using a CORS-unblocker extension if this persists.", 'error');
+                    } else {
+                        logMessage(error.message, 'error');
+                    }
+                } finally {
+                    btn.disabled = false;
+                    btn.classList.replace('bg-blue-800', 'bg-blue-600');
+                    btn.innerHTML = `Execute Search Map`;
+                }
+            });
+        });
+    </script>
+</body>
+</html>
