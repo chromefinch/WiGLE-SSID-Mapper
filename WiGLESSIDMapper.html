@@ -97,8 +97,8 @@
                     <h2 class="text-xs uppercase text-gray-400 font-semibold tracking-wider mb-3">Target Query</h2>
                     <div class="space-y-3">
                         <div>
-                            <label class="block text-xs font-medium mb-1 text-gray-300">Network Name (SSID)</label>
-                            <input type="text" id="ssidQuery" required class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="e.g., xfinitywifi">
+                            <label class="block text-xs font-medium mb-1 text-gray-300">Network Name (SSID) <span class="text-gray-500 font-normal">(Optional)</span></label>
+                            <input type="text" id="ssidQuery" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="Leave blank for all SSIDs">
                         </div>
                         <div>
                             <label class="block text-xs font-medium mb-1 text-gray-300">Search Area <span class="text-gray-500 font-normal">(Type OR Draw on Map)</span></label>
@@ -158,6 +158,7 @@
         let drawnItems;
         let useDrawnBounds = false;
         let customBounds = null;
+        let ssidMapMarkers = {};
 
         // --- Map Initialization ---
         function initMap() {
@@ -290,29 +291,73 @@
             }
         }
 
-        // --- Location Preview Engine ---
+        // --- OUI (MAC Vendor) Lookup ---
+        window.lookupOUI = async function(event, mac, elementId) {
+            // Stop the click from passing through to the map and closing the popup
+            if (event) {
+                event.stopPropagation();
+                event.preventDefault();
+            }
+            
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            
+            // Set loading state
+            el.innerHTML = '<span class="text-gray-500 animate-pulse text-[10px]">Looking up...</span>';
+            
+            try {
+                // Primary API attempt (maclookup.app)
+                try {
+                    const response = await fetch(`https://api.maclookup.app/v2/macs/${encodeURIComponent(mac)}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.success && data.found) {
+                            el.innerHTML = `<span class="text-green-400 font-semibold truncate max-w-[120px] inline-block align-bottom" title="${data.company}">${data.company}</span>`;
+                            return;
+                        }
+                    }
+                } catch(e) { 
+                    console.warn("Primary OUI API failed, falling back...", e); 
+                }
+
+                // Fallback API attempt (macvendors.com)
+                const fbResponse = await fetch(`https://api.macvendors.com/${encodeURIComponent(mac)}`);
+                if (fbResponse.ok) {
+                    const company = await fbResponse.text();
+                    el.innerHTML = `<span class="text-green-400 font-semibold truncate max-w-[120px] inline-block align-bottom" title="${company}">${company}</span>`;
+                    return;
+                }
+
+                // If both fail or return not found
+                el.innerHTML = `<span class="text-gray-500 italic text-[10px]">Unknown Vendor</span>`;
+            } catch (err) {
+                console.error("OUI Lookup Error:", err);
+                el.innerHTML = `<button type="button" onclick="lookupOUI(event, '${mac}', '${elementId}')" class="text-[10px] bg-red-900/50 hover:bg-red-800/50 border border-red-700 px-2 py-0.5 rounded text-red-300 transition-colors" title="Retry">Error (Retry)</button>`;
+            }
+        };
+
+        // --- Geocoding Location Preview ---
         async function previewLocation() {
             const areaStr = document.getElementById('areaQuery').value.trim();
             if (!areaStr || areaStr === "[Custom Map Area Drawn]") {
-                logMessage("Please enter a text location to geocode first.", "warn");
+                logMessage("Please enter a valid text location to preview.", 'warn');
                 return false;
             }
-            
-            const btn = document.getElementById('locateBtn');
-            const originalText = btn.innerText;
-            btn.innerHTML = `<svg class="animate-spin h-4 w-4 text-white inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>`;
-            btn.disabled = true;
 
+            logMessage(`Resolving geographic coordinates for "${areaStr}"...`);
+            const geoUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(areaStr)}&format=json&limit=1`;
+            
             try {
-                logMessage(`Resolving geographic coordinates for "${areaStr}"...`);
-                const geoUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(areaStr)}&format=json&limit=1`;
-                
                 const geoRes = await fetchWithBackoff(geoUrl, { headers: { 'User-Agent': 'WiGLE-SSID-Mapper' } });
                 if (!geoRes.ok) throw new Error("Geocoding service unavailable.");
                 
                 const geoData = await geoRes.json();
-                if (!geoData || geoData.length === 0) throw new Error(`Could not pinpoint area: ${areaStr}`);
+                if (!geoData || geoData.length === 0) {
+                    logMessage(`Could not pinpoint area: ${areaStr}`, 'error');
+                    return false;
+                }
                 
+                // Extract boundaries
                 const bbox = geoData[0].boundingbox;
                 const latMin = parseFloat(bbox[0]);
                 const latMax = parseFloat(bbox[1]);
@@ -321,7 +366,8 @@
 
                 logMessage(`Coordinates mapped: Bounds [${latMin.toFixed(2)}, ${lonMin.toFixed(2)}] to [${latMax.toFixed(2)}, ${lonMax.toFixed(2)}]`, 'success');
 
-                const bounds = L.latLngBounds([latMin, lonMin], [latMax, lonMax]);
+                // Draw boundaries on map and zoom to fit
+                const bounds = [[latMin, lonMin], [latMax, lonMax]];
                 drawnItems.clearLayers();
                 const rect = L.rectangle(bounds, {
                     color: "#ef4444", 
@@ -332,20 +378,20 @@
                 });
                 drawnItems.addLayer(rect);
                 map.fitBounds(bounds, { padding: [50, 50] });
-                
-                customBounds = bounds;
+
+                // Store bounds so search can use them
+                customBounds = rect.getBounds();
                 useDrawnBounds = true;
                 
+                // Update UI visually
                 const areaInput = document.getElementById('areaQuery');
+                areaInput.value = "[Custom Map Area Drawn]";
                 areaInput.classList.add('text-green-400', 'font-semibold');
-                
+
                 return true;
-            } catch (error) {
-                logMessage(error.message, 'error');
+            } catch (err) {
+                logMessage(`Geocoding error: ${err.message}`, 'error');
                 return false;
-            } finally {
-                btn.innerText = originalText;
-                btn.disabled = false;
             }
         }
 
@@ -353,7 +399,7 @@
         async function executeSearch(apiName, apiToken, ssid, areaStr, maxResults) {
             let latMin, latMax, lonMin, lonMax;
 
-            // 1. Determine geographic coordinates
+            // 1. Determine geographic coordinates (Drawn Box vs Text Search)
             if (!useDrawnBounds || !customBounds) {
                 logMessage("No active map bounds detected. Attempting to geocode location...");
                 const locateSuccess = await previewLocation();
@@ -366,12 +412,13 @@
             lonMin = customBounds.getWest();
             lonMax = customBounds.getEast();
 
-            // Clear previous markers
+            // Clear previous markers and mappings
             mapMarkers.forEach(m => map.removeLayer(m));
             mapMarkers = [];
+            ssidMapMarkers = {};
 
             // 2. Query WiGLE API iteratively
-            logMessage(`Initializing WiGLE intercept sequence for SSID: ${ssid}...`);
+            logMessage(`Initializing WiGLE intercept sequence${ssid ? ' for SSID: ' + ssid : ' for all local APs'}...`);
             const authHeader = 'Basic ' + btoa(`${apiName}:${apiToken}`);
             
             let fetchedCount = 0;
@@ -379,8 +426,12 @@
             let uniqueSSIDs = new Set();
 
             while (fetchedCount < maxResults) {
-                let apiUrl = `https://api.wigle.net/api/v2/network/search?ssid=${encodeURIComponent(ssid)}&latrange1=${latMin}&latrange2=${latMax}&longrange1=${lonMin}&longrange2=${lonMax}`;
+                let apiUrl = `https://api.wigle.net/api/v2/network/search?latrange1=${latMin}&latrange2=${latMax}&longrange1=${lonMin}&longrange2=${lonMax}`;
                 
+                if (ssid) {
+                    apiUrl += `&ssid=${encodeURIComponent(ssid)}`;
+                }
+
                 if (searchAfterToken) {
                     apiUrl += `&searchAfter=${searchAfterToken}`;
                 }
@@ -416,10 +467,8 @@
 
                 // Parse and Plot Results
                 results.forEach(net => {
-                    // Track Unique SSIDs
-                    if (net.ssid) {
-                        uniqueSSIDs.add(net.ssid);
-                    }
+                    const displaySsid = net.ssid || 'Hidden Network';
+                    uniqueSSIDs.add(displaySsid);
 
                     if (net.trilat && net.trilong) {
                         const marker = L.circleMarker([net.trilat, net.trilong], {
@@ -431,10 +480,19 @@
                             fillOpacity: 0.8
                         }).addTo(map);
 
+                        // Map this marker to its SSID for the sidebar buttons
+                        if (!ssidMapMarkers[displaySsid]) {
+                            ssidMapMarkers[displaySsid] = [];
+                        }
+                        ssidMapMarkers[displaySsid].push(marker);
+
                         let dateStr = 'Unknown';
                         if (net.lastupdt && net.lastupdt.length >= 8) {
                             dateStr = `${net.lastupdt.substring(0,4)}-${net.lastupdt.substring(4,6)}-${net.lastupdt.substring(6,8)}`;
                         }
+
+                        // Create a DOM-safe ID for the vendor text element
+                        const safeNetId = net.netid ? net.netid.replace(/:/g, '') : 'unknown';
 
                         const popupContent = `
                             <div class="p-1 font-sans min-w-[200px]">
@@ -443,11 +501,17 @@
                                     <span class="text-xs font-normal px-2 py-1 bg-gray-700 rounded-full text-gray-300 ml-2">${net.channel || '?'} Ch</span>
                                 </div>
                                 <div class="grid grid-cols-1 gap-1 text-sm">
-                                    <div class="flex justify-between text-gray-300">
+                                    <div class="flex justify-between items-center text-gray-300">
                                         <span class="font-semibold text-gray-400">BSSID:</span> 
                                         <span class="font-mono text-xs">${net.netid || 'N/A'}</span>
                                     </div>
-                                    <div class="flex justify-between text-gray-300">
+                                    <div class="flex justify-between items-center text-gray-300 mb-1">
+                                        <span class="font-semibold text-gray-400">Vendor:</span> 
+                                        <span id="vendor-${safeNetId}" class="text-right">
+                                            <button type="button" onclick="lookupOUI(event, '${net.netid}', 'vendor-${safeNetId}')" class="text-[10px] bg-gray-700 hover:bg-gray-600 border border-gray-600 px-2 py-0.5 rounded text-blue-300 transition-colors shadow-sm">Lookup OUI</button>
+                                        </span>
+                                    </div>
+                                    <div class="flex justify-between text-gray-300 border-t border-gray-700 pt-1">
                                         <span class="font-semibold text-gray-400">Encryption:</span> 
                                         <span>${net.encryption || 'Open'}</span>
                                     </div>
@@ -490,10 +554,24 @@
                 ssidContainer.innerHTML = '<span class="text-gray-600 w-full text-center italic mt-10">No networks found.</span>';
             } else {
                 Array.from(uniqueSSIDs).sort().forEach(ssidName => {
-                    const pill = document.createElement('span');
-                    pill.className = 'px-2 py-1 bg-gray-800 border border-gray-600 hover:border-blue-500 transition-colors rounded text-gray-300 truncate max-w-full cursor-default';
-                    pill.title = ssidName;
+                    const pill = document.createElement('button');
+                    pill.type = 'button';
+                    pill.className = 'px-2 py-1 bg-gray-800 border border-gray-600 hover:border-blue-500 hover:bg-gray-700 transition-colors rounded text-gray-300 truncate max-w-full cursor-pointer text-left shadow-sm';
+                    pill.title = `View ${ssidName} on map`;
                     pill.textContent = ssidName;
+                    
+                    // Add click event to locate on map
+                    pill.onclick = () => {
+                        const markers = ssidMapMarkers[ssidName];
+                        if (markers && markers.length > 0) {
+                            const group = new L.featureGroup(markers);
+                            map.fitBounds(group.getBounds(), { padding: [50, 50], maxZoom: 18 });
+                            
+                            // Automatically open the first marker's popup
+                            markers[0].openPopup();
+                        }
+                    };
+                    
                     ssidContainer.appendChild(pill);
                 });
             }
