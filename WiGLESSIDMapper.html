@@ -97,13 +97,15 @@
                     <h2 class="text-xs uppercase text-gray-400 font-semibold tracking-wider mb-3">Target Query</h2>
                     <div class="space-y-3">
                         <div>
-                            <label class="block text-xs font-medium mb-1 text-gray-300">Network Name (SSID) <span class="text-gray-500 font-normal">(Optional)</span></label>
-                            <!-- Removed "required" to allow searching for any SSID -->
-                            <input type="text" id="ssidQuery" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="Leave blank for all SSIDs">
+                            <label class="block text-xs font-medium mb-1 text-gray-300">Network Name (SSID)</label>
+                            <input type="text" id="ssidQuery" required class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="e.g., xfinitywifi">
                         </div>
                         <div>
                             <label class="block text-xs font-medium mb-1 text-gray-300">Search Area <span class="text-gray-500 font-normal">(Type OR Draw on Map)</span></label>
-                            <input type="text" id="areaQuery" class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="e.g., Virginia, USA or Draw a Box">
+                            <div class="flex gap-2">
+                                <input type="text" id="areaQuery" class="flex-1 w-full bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-colors" placeholder="e.g., Virginia, USA or Draw a Box">
+                                <button type="button" id="locateBtn" class="bg-gray-700 hover:bg-blue-600 text-white font-medium px-4 py-2 rounded text-sm transition-colors border border-gray-600 hover:border-blue-500 shadow-sm whitespace-nowrap" title="Preview map bounds before searching">Locate First</button>
+                            </div>
                         </div>
                         <div>
                             <label class="block text-xs font-medium mb-1 text-gray-300">Pagination Limit</label>
@@ -128,6 +130,17 @@
                 <div id="logConsole" class="bg-gray-950 p-3 rounded-lg h-32 md:h-40 overflow-y-auto text-xs font-mono space-y-1 border border-gray-700 shadow-inner">
                     <div class="text-gray-500">[System] Map engine initialized.</div>
                     <div class="text-gray-500">[System] Awaiting execution parameters.</div>
+                </div>
+            </div>
+
+            <!-- Unique SSIDs List -->
+            <div class="mt-4 pb-4">
+                <h2 class="text-xs uppercase text-gray-400 font-semibold tracking-wider mb-2 flex justify-between items-center">
+                    <span>Discovered SSIDs</span>
+                    <span id="ssidCount" class="bg-blue-900 text-blue-300 py-0.5 px-2 rounded-full text-[10px]">0 Unique</span>
+                </h2>
+                <div id="ssidList" class="bg-gray-950 p-3 rounded-lg h-32 md:h-40 overflow-y-auto text-xs font-mono border border-gray-700 shadow-inner flex flex-wrap gap-2 content-start">
+                    <span class="text-gray-600 w-full text-center italic mt-10">Awaiting scan...</span>
                 </div>
             </div>
         </div>
@@ -175,7 +188,8 @@
                         shapeOptions: {
                             color: "#ef4444", 
                             weight: 2, 
-                            fill: false, // Prevents the red fill inside the bounding box
+                            fillColor: "#ef4444", 
+                            fillOpacity: 0.05,
                             dashArray: "5, 5"
                         }
                     }
@@ -276,18 +290,20 @@
             }
         }
 
-        // --- Primary Search Execution Engine ---
-        async function executeSearch(apiName, apiToken, ssid, areaStr, maxResults) {
-            let latMin, latMax, lonMin, lonMax;
+        // --- Location Preview Engine ---
+        async function previewLocation() {
+            const areaStr = document.getElementById('areaQuery').value.trim();
+            if (!areaStr || areaStr === "[Custom Map Area Drawn]") {
+                logMessage("Please enter a text location to geocode first.", "warn");
+                return false;
+            }
+            
+            const btn = document.getElementById('locateBtn');
+            const originalText = btn.innerText;
+            btn.innerHTML = `<svg class="animate-spin h-4 w-4 text-white inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>`;
+            btn.disabled = true;
 
-            // 1. Determine geographic coordinates (Drawn Box vs Text Search)
-            if (useDrawnBounds && customBounds) {
-                logMessage("Utilizing custom drawn bounding box coordinates...");
-                latMin = customBounds.getSouth();
-                latMax = customBounds.getNorth();
-                lonMin = customBounds.getWest();
-                lonMax = customBounds.getEast();
-            } else {
+            try {
                 logMessage(`Resolving geographic coordinates for "${areaStr}"...`);
                 const geoUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(areaStr)}&format=json&limit=1`;
                 
@@ -297,47 +313,73 @@
                 const geoData = await geoRes.json();
                 if (!geoData || geoData.length === 0) throw new Error(`Could not pinpoint area: ${areaStr}`);
                 
-                // Extract boundaries
                 const bbox = geoData[0].boundingbox;
-                latMin = parseFloat(bbox[0]);
-                latMax = parseFloat(bbox[1]);
-                lonMin = parseFloat(bbox[2]);
-                lonMax = parseFloat(bbox[3]);
+                const latMin = parseFloat(bbox[0]);
+                const latMax = parseFloat(bbox[1]);
+                const lonMin = parseFloat(bbox[2]);
+                const lonMax = parseFloat(bbox[3]);
 
                 logMessage(`Coordinates mapped: Bounds [${latMin.toFixed(2)}, ${lonMin.toFixed(2)}] to [${latMax.toFixed(2)}, ${lonMax.toFixed(2)}]`, 'success');
 
-                // Draw boundaries on map and zoom to fit
-                const bounds = [[latMin, lonMin], [latMax, lonMax]];
+                const bounds = L.latLngBounds([latMin, lonMin], [latMax, lonMax]);
                 drawnItems.clearLayers();
                 const rect = L.rectangle(bounds, {
                     color: "#ef4444", 
                     weight: 2, 
-                    fill: false, // Ensures it's just an outline
+                    fillColor: "#ef4444", 
+                    fillOpacity: 0.05,
                     dashArray: "5, 5"
                 });
                 drawnItems.addLayer(rect);
                 map.fitBounds(bounds, { padding: [50, 50] });
+                
+                customBounds = bounds;
+                useDrawnBounds = true;
+                
+                const areaInput = document.getElementById('areaQuery');
+                areaInput.classList.add('text-green-400', 'font-semibold');
+                
+                return true;
+            } catch (error) {
+                logMessage(error.message, 'error');
+                return false;
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
             }
+        }
+
+        // --- Primary Search Execution Engine ---
+        async function executeSearch(apiName, apiToken, ssid, areaStr, maxResults) {
+            let latMin, latMax, lonMin, lonMax;
+
+            // 1. Determine geographic coordinates
+            if (!useDrawnBounds || !customBounds) {
+                logMessage("No active map bounds detected. Attempting to geocode location...");
+                const locateSuccess = await previewLocation();
+                if (!locateSuccess) throw new Error("Could not resolve location map bounds. Aborting search.");
+            }
+
+            logMessage("Utilizing active bounding box coordinates...");
+            latMin = customBounds.getSouth();
+            latMax = customBounds.getNorth();
+            lonMin = customBounds.getWest();
+            lonMax = customBounds.getEast();
 
             // Clear previous markers
             mapMarkers.forEach(m => map.removeLayer(m));
             mapMarkers = [];
 
             // 2. Query WiGLE API iteratively
-            logMessage(`Initializing WiGLE intercept sequence${ssid ? ' for SSID: ' + ssid : ' for all local APs'}...`);
+            logMessage(`Initializing WiGLE intercept sequence for SSID: ${ssid}...`);
             const authHeader = 'Basic ' + btoa(`${apiName}:${apiToken}`);
             
             let fetchedCount = 0;
             let searchAfterToken = null;
+            let uniqueSSIDs = new Set();
 
             while (fetchedCount < maxResults) {
-                
-                // Dynamically build API url (allows SSID to be optional)
-                let apiUrl = `https://api.wigle.net/api/v2/network/search?latrange1=${latMin}&latrange2=${latMax}&longrange1=${lonMin}&longrange2=${lonMax}`;
-                
-                if (ssid) {
-                    apiUrl += `&ssid=${encodeURIComponent(ssid)}`;
-                }
+                let apiUrl = `https://api.wigle.net/api/v2/network/search?ssid=${encodeURIComponent(ssid)}&latrange1=${latMin}&latrange2=${latMax}&longrange1=${lonMin}&longrange2=${lonMax}`;
                 
                 if (searchAfterToken) {
                     apiUrl += `&searchAfter=${searchAfterToken}`;
@@ -374,6 +416,11 @@
 
                 // Parse and Plot Results
                 results.forEach(net => {
+                    // Track Unique SSIDs
+                    if (net.ssid) {
+                        uniqueSSIDs.add(net.ssid);
+                    }
+
                     if (net.trilat && net.trilong) {
                         const marker = L.circleMarker([net.trilat, net.trilong], {
                             radius: 5,
@@ -433,12 +480,32 @@
                 await new Promise(r => setTimeout(r, 600)); 
             }
 
+            // Render Unique SSIDs to UI
+            const ssidContainer = document.getElementById('ssidList');
+            const countDisplay = document.getElementById('ssidCount');
+            countDisplay.innerText = `${uniqueSSIDs.size} Unique`;
+            
+            ssidContainer.innerHTML = '';
+            if (uniqueSSIDs.size === 0) {
+                ssidContainer.innerHTML = '<span class="text-gray-600 w-full text-center italic mt-10">No networks found.</span>';
+            } else {
+                Array.from(uniqueSSIDs).sort().forEach(ssidName => {
+                    const pill = document.createElement('span');
+                    pill.className = 'px-2 py-1 bg-gray-800 border border-gray-600 hover:border-blue-500 transition-colors rounded text-gray-300 truncate max-w-full cursor-default';
+                    pill.title = ssidName;
+                    pill.textContent = ssidName;
+                    ssidContainer.appendChild(pill);
+                });
+            }
+
             logMessage(`Operation concluded. Mapped ${fetchedCount} total network access points.`, 'success');
         }
 
         // --- Event Listeners ---
         document.addEventListener('DOMContentLoaded', () => {
             initMap();
+            
+            document.getElementById('locateBtn').addEventListener('click', previewLocation);
             
             const form = document.getElementById('searchForm');
             form.addEventListener('submit', async (e) => {
@@ -461,6 +528,8 @@
                 btn.innerHTML = `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Compiling Data...`;
                 
                 logBox.innerHTML = '';
+                document.getElementById('ssidList').innerHTML = '<span class="text-gray-500 w-full text-center italic mt-10 animate-pulse">Scanning...</span>';
+                document.getElementById('ssidCount').innerText = `0 Unique`;
                 logMessage('Commencing new operation block...');
 
                 const apiName = document.getElementById('apiName').value.trim();
