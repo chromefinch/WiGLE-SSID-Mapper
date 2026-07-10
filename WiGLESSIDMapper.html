@@ -292,7 +292,7 @@
         }
 
         // --- OUI (MAC Vendor) Lookup ---
-        window.lookupOUI = async function(event, mac, elementId) {
+        window.lookupOUI = function(event, mac, elementId) {
             // Stop the click from passing through to the map and closing the popup
             if (event) {
                 event.stopPropagation();
@@ -300,40 +300,34 @@
             }
             
             const el = document.getElementById(elementId);
-            if (!el) return;
             
-            // Set loading state
-            el.innerHTML = '<span class="text-gray-500 animate-pulse text-[10px]">Looking up...</span>';
+            // iFrame safe clipboard copy using execCommand
+            const textArea = document.createElement("textarea");
+            textArea.value = mac;
+            textArea.style.position = "fixed";  // Avoid scrolling to bottom
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
             
             try {
-                // Primary API attempt (maclookup.app)
-                try {
-                    const response = await fetch(`https://api.maclookup.app/v2/macs/${encodeURIComponent(mac)}`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.success && data.found) {
-                            el.innerHTML = `<span class="text-green-400 font-semibold truncate max-w-[120px] inline-block align-bottom" title="${data.company}">${data.company}</span>`;
-                            return;
-                        }
-                    }
-                } catch(e) { 
-                    console.warn("Primary OUI API failed, falling back...", e); 
-                }
-
-                // Fallback API attempt (macvendors.com)
-                const fbResponse = await fetch(`https://api.macvendors.com/${encodeURIComponent(mac)}`);
-                if (fbResponse.ok) {
-                    const company = await fbResponse.text();
-                    el.innerHTML = `<span class="text-green-400 font-semibold truncate max-w-[120px] inline-block align-bottom" title="${company}">${company}</span>`;
-                    return;
-                }
-
-                // If both fail or return not found
-                el.innerHTML = `<span class="text-gray-500 italic text-[10px]">Unknown Vendor</span>`;
+                document.execCommand('copy');
             } catch (err) {
-                console.error("OUI Lookup Error:", err);
-                el.innerHTML = `<button type="button" onclick="lookupOUI(event, '${mac}', '${elementId}')" class="text-[10px] bg-red-900/50 hover:bg-red-800/50 border border-red-700 px-2 py-0.5 rounded text-red-300 transition-colors" title="Retry">Error (Retry)</button>`;
+                console.error('Unable to copy MAC to clipboard', err);
             }
+            document.body.removeChild(textArea);
+
+            // Update UI briefly to show success
+            if (el) {
+                el.innerHTML = '<span class="text-green-400 font-semibold text-[10px] whitespace-nowrap">Copied! Opening...</span>';
+                
+                // Revert back to the button after 2.5 seconds
+                setTimeout(() => {
+                    el.innerHTML = `<button type="button" onclick="lookupOUI(event, '${mac}', '${elementId}')" class="text-[10px] bg-gray-700 hover:bg-gray-600 border border-gray-600 px-2 py-0.5 rounded text-blue-300 transition-colors shadow-sm">Lookup OUI</button>`;
+                }, 2500);
+            }
+
+            // Open Wireshark OUI Lookup tool
+            window.open('https://www.wireshark.org/tools/oui-lookup.html', '_blank');
         };
 
         // --- Geocoding Location Preview ---
